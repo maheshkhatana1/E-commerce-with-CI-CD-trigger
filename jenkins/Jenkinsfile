@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = "ap-south-1"
+        ECR_REPO   = "ecommerce-app"
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage("Checkout Code") {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage("Terraform Format & Validate") {
+            steps {
+                dir('terraform') {
+                    sh 'terraform fmt -recursive'
+                    sh 'terraform init -backend=false'
+                    sh 'terraform validate'
+                }
+            }
+        }
+
+        stage("Checkov - Terraform Security Scan") {
+            steps {
+                sh 'checkov -d terraform/'
+            }
+        }
+
+        stage("Build Docker Image") {
+            steps {
+                sh '''
+                docker build -t ${ECR_REPO}:${IMAGE_TAG} -f docker/Dockerfile .
+                '''
+            }
+        }
+
+        stage("Trivy - Docker Image Scan") {
+            steps {
+                sh '''
+                trivy image --severity HIGH,CRITICAL ${ECR_REPO}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage("Authenticate to AWS ECR") {
+            steps {
+                sh '''
+                aws ecr get-login-password --region ${AWS_REGION} \
+                | docker login --username AWS --password-stdin \
+                $(aws ecr describe-repositories \
+                --repository-names ${ECR_REPO} \
+                --query 'repositories[0].repositoryUri' \
+                --output text)
+                '''
+            }
+        }
+
+        stage("Push Image to ECR") {
+            steps {
+                sh '''
+                ECR_URI=$(aws ecr describe-repositories \
+                --repository-names ${ECR_REPO} \
+                --query 'repositories[0].repositoryUri' \
+                --output text)
+
+                docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
+                docker push ${ECR_URI}:${IMAGE_TAG}
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline completed successfully"
+        }
+        failure {
+            echo "❌ Pipeline failed"
+        }
+    }
+}
