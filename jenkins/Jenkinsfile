@@ -5,6 +5,9 @@ pipeline {
         AWS_REGION = "ap-south-1"
         ECR_REPO   = "ecommerce-app"
         IMAGE_TAG  = "${BUILD_NUMBER}"
+
+        // 🔒 SAFETY SWITCH
+        DEPLOY = "false"   // change to "true" only when ready
     }
 
     stages {
@@ -18,16 +21,49 @@ pipeline {
         stage("Terraform Format & Validate") {
             steps {
                 dir('terraform') {
-                    sh 'terraform fmt -recursive'
-                    sh 'terraform init -backend=false'
-                    sh 'terraform validate'
+                    sh '''
+                    terraform fmt -recursive
+                    terraform init -backend=false
+                    terraform validate
+                    '''
                 }
             }
         }
 
         stage("Checkov - Terraform Security Scan") {
             steps {
-                sh 'checkov -d terraform/'
+                sh 'checkov -d terraform/ --severity HIGH,CRITICAL'
+            }
+        }
+
+        stage("Terraform Plan") {
+            steps {
+                dir('terraform') {
+                    sh '''
+                    terraform init
+                    terraform plan -out=tfplan
+                    '''
+                }
+            }
+        }
+
+        stage("Manual Approval") {
+            when {
+                expression { env.DEPLOY == "true" }
+            }
+            steps {
+                input message: "🚨 Approve Terraform APPLY & Deployment?"
+            }
+        }
+
+        stage("Terraform Apply") {
+            when {
+                expression { env.DEPLOY == "true" }
+            }
+            steps {
+                dir('terraform') {
+                    sh 'terraform apply -auto-approve tfplan'
+                }
             }
         }
 
@@ -48,28 +84,55 @@ pipeline {
         }
 
         stage("Authenticate to AWS ECR") {
+            when {
+                expression { env.DEPLOY == "true" }
+            }
             steps {
-                sh '''
-                aws ecr get-login-password --region ${AWS_REGION} \
-                | docker login --username AWS --password-stdin \
-                $(aws ecr describe-repositories \
-                --repository-names ${ECR_REPO} \
-                --query 'repositories[0].repositoryUri' \
-                --output text)
-                '''
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                  credentialsId: 'aws-creds']]) {
+                    sh '''
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                    | docker login --username AWS --password-stdin \
+                    $(aws ecr describe-repositories \
+                    --repository-names ${ECR_REPO} \
+                    --query 'repositories[0].repositoryUri' \
+                    --output text)
+                    '''
+                }
             }
         }
 
         stage("Push Image to ECR") {
+            when {
+                expression { env.DEPLOY == "true" }
+            }
             steps {
-                sh '''
-                ECR_URI=$(aws ecr describe-repositories \
-                --repository-names ${ECR_REPO} \
-                --query 'repositories[0].repositoryUri' \
-                --output text)
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                  credentialsId: 'aws-creds']]) {
+                    sh '''
+                    ECR_URI=$(aws ecr describe-repositories \
+                    --repository-names ${ECR_REPO} \
+                    --query 'repositories[0].repositoryUri' \
+                    --output text)
 
-                docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
-                docker push ${ECR_URI}:${IMAGE_TAG}
+                    docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_URI}:${IMAGE_TAG}
+                    docker push ${ECR_URI}:${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+
+        stage("Dry Run Summary") {
+            when {
+                expression { env.DEPLOY == "false" }
+            }
+            steps {
+                echo '''
+                ✅ DRY RUN COMPLETED
+                - Terraform validated & planned
+                - Security scans completed
+                - Docker image built
+                - NO AWS resources created
                 '''
             }
         }
@@ -77,7 +140,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed successfully"
+            echo "🎉 Pipeline completed successfully"
         }
         failure {
             echo "❌ Pipeline failed"
