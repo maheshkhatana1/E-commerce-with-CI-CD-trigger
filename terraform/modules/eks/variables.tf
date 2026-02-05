@@ -1,18 +1,19 @@
 variable "cluster_name" {
-  type = string
-}
-
-variable "subnet_ids" {
-  type = list(string)
+  description = "Name of the EKS cluster"
+  type        = string
 }
 
 variable "cluster_role_arn" {
-  type = string
+  description = "ARN of IAM role for EKS cluster"
+  type        = string
 }
 
 variable "node_role_arn" {
-  type = string
+  description = "ARN of IAM role for EKS node group"
+  type        = string
 }
 
-
-
+variable "nodegroup_subnet_ids" {
+  description = "Subnets for EKS cluster and node group"
+  type        = list(string)
+}

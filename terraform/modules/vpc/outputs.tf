@@ -2,6 +2,7 @@ output "vpc_id" {
   value = aws_vpc.this.id
 }
 
-output "private_subnets" {
+output "private_subnet_ids" {
   value = aws_subnet.private[*].id
 }
+

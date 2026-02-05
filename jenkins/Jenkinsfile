@@ -34,7 +34,7 @@ pipeline {
         stage("Checkov - Terraform Security Scan") {
             steps {
                 sh '''
-                checkov -d terraform/ --severity HIGH,CRITICAL || true
+                checkov -d terraform/ --soft-fail || true
                 '''
             }
         }
